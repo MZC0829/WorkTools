@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>全能工具箱 — 文档 · 图片 · 压缩 · 取色</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
+<script>
+/* 首屏前应用已保存主题，避免闪烁；默认跟随系统 */
+(function () {
+  try {
+    var t = localStorage.getItem('ft-theme');
+    if (t !== 'dark' && t !== 'light') {
+      t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.dataset.theme = t;
+  } catch (e) { document.documentElement.dataset.theme = 'light'; }
+})();
+</script>
+<link rel="stylesheet" href="css/style.css?v=11">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="container header-inner">
+    <div class="brand">
+      <div class="brand-mark">📄</div>
+      <div>
+        <h1>全能工具箱</h1>
+        <p class="brand-sub">文档处理 · 图片工具 · 压缩解压 · 拾色器 — 一站式本地工具</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="theme-switch" role="group" aria-label="选择主题">
+        <button class="theme-btn" data-theme-set="light" title="浅色主题">☀️ 浅色</button>
+        <button class="theme-btn" data-theme-set="dark" title="深色主题">🌙 深色</button>
+      </div>
+      <div class="privacy-badge" title="所有处理均在浏览器本地完成">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        本地处理 · 文件不上传
+      </div>
+    </div>
+  </div>
+</header>
+
+<nav class="container">
+  <div class="tabs" role="tablist">
+    <button class="tab active" data-tab="doc" role="tab">📄 文档工具</button>
+    <button class="tab" data-tab="image" role="tab">🖼️ 图片工具</button>
+    <button class="tab" data-tab="archive" role="tab">📦 压缩解压</button>
+    <button class="tab" data-tab="picker" role="tab">🎯 拾色器</button>
+  </div>
+</nav>
+
+<main class="container">
+
+  <!-- ============ 文档工具（格式转换 / 压缩 / 排序 / 编辑） ============ -->
+  <section id="tab-doc" class="tab-panel active">
+    <div class="seg doc-modes">
+      <button class="seg-btn doc-tab active" data-dmode="convert">格式转换</button>
+      <button class="seg-btn doc-tab" data-dmode="compress">文档压缩</button>
+      <button class="seg-btn doc-tab" data-dmode="reorder">页面排序</button>
+      <button class="seg-btn doc-tab" data-dmode="edit">文档编辑</button>
+    </div>
+
+    <div id="tab-convert" class="doc-pane active">
+    <div class="dropzone" id="convertDrop">
+      <input type="file" id="convertInput" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+      <div class="dz-icon">🔄</div>
+      <div class="dz-title">拖入或点击选择文件</div>
+      <div class="dz-sub">支持 <b>.docx → PDF</b> 与 <b>.pdf → Word</b>（自动识别方向）</div>
+    </div>
+
+    <div id="convertBody" class="hidden">
+      <div class="file-card" id="convertFileCard"></div>
+
+      <!-- docx -> pdf -->
+      <div id="convertDocxPane" class="hidden">
+        <div class="actions-row">
+          <button class="btn btn-primary" id="btnDocxToPdf">导出 PDF（直接下载）</button>
+          <button class="btn btn-ghost btn-reset" data-reset="convert">换个文件</button>
+        </div>
+        <p class="hint">一键生成并直接下载 PDF：页面为高清渲染，任何字体（含中文）均正常显示，并自动内嵌可搜索、可复制的文字层。</p>
+        <div class="preview-scroll"><div id="docxPreview"></div></div>
+      </div>
+
+      <!-- pdf -> docx -->
+      <div id="convertPdfPane" class="hidden">
+        <div class="actions-row">
+          <button class="btn btn-primary" id="btnPdfToDocx">转换为 Word（.docx）</button>
+          <button class="btn btn-ghost btn-reset" data-reset="convert">换个文件</button>
+        </div>
+        <p class="hint">提取 PDF 中的文字流并生成 Word 文档，适合以文字为主的 PDF；扫描件（纯图片）无法提取文字。</p>
+      </div>
+
+      <div class="progress-wrap hidden" id="convertProgress">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-text"></div>
+      </div>
+      <div class="result-card hidden" id="convertResult"></div>
+    </div>
+    </div>
+
+    <!-- 文档压缩 -->
+    <div id="tab-compress" class="doc-pane">
+    <div class="dropzone" id="compressDrop">
+      <input type="file" id="compressInput" accept=".pdf,application/pdf" hidden>
+      <div class="dz-icon">🗜️</div>
+      <div class="dz-title">拖入或点击选择 PDF 文件</div>
+      <div class="dz-sub">先预览压缩效果与预计大小，再决定是否压缩</div>
+    </div>
+
+    <div id="compressBody" class="hidden">
+      <div class="file-card" id="compressFileCard"></div>
+
+      <div class="preset-grid" id="presetGrid">
+        <label class="preset-card">
+          <input type="radio" name="preset" value="high" checked>
+          <div class="preset-name">轻度压缩</div>
+          <div class="preset-desc">150 DPI · 质量 85%</div>
+          <div class="preset-tag">清晰优先</div>
+        </label>
+        <label class="preset-card">
+          <input type="radio" name="preset" value="balanced">
+          <div class="preset-name">均衡压缩 <span class="rec">推荐</span></div>
+          <div class="preset-desc">120 DPI · 质量 70%</div>
+          <div class="preset-tag">大小与清晰度兼顾</div>
+        </label>
+        <label class="preset-card">
+          <input type="radio" name="preset" value="extreme">
+          <div class="preset-name">极限压缩</div>
+          <div class="preset-desc">90 DPI · 质量 50%</div>
+          <div class="preset-tag">体积最小</div>
+        </label>
+        <label class="preset-card">
+          <input type="radio" name="preset" value="lossless">
+          <div class="preset-name">无损优化</div>
+          <div class="preset-desc">重写文件结构</div>
+          <div class="preset-tag">保留文字可选中</div>
+        </label>
+      </div>
+
+      <div class="custom-row" id="customRow">
+        <label class="switch-label"><input type="checkbox" id="customToggle"> 自定义参数</label>
+        <div class="sliders hidden" id="customSliders">
+          <div class="slider-item">
+            <span>分辨率 <b id="dpiVal">120</b> DPI</span>
+            <input type="range" id="dpiSlider" min="72" max="200" step="2" value="120">
+          </div>
+          <div class="slider-item">
+            <span>图像质量 <b id="qualityVal">70</b>%</span>
+            <input type="range" id="qualitySlider" min="30" max="95" step="1" value="70">
+          </div>
+        </div>
+      </div>
+
+      <div class="actions-row">
+        <button class="btn btn-secondary" id="btnPreview">生成效果预览</button>
+        <button class="btn btn-primary" id="btnCompress">开始压缩</button>
+        <button class="btn btn-ghost btn-reset" data-reset="compress">换个文件</button>
+      </div>
+      <p class="hint">压缩会将页面转为图片（文字不可再选中），最适合扫描件与图片型 PDF；如需保留文字层，请选择「无损优化」。</p>
+
+      <div id="previewArea" class="hidden">
+        <div class="estimate-line" id="estimateLine"></div>
+        <div class="compare-grid">
+          <figure><figcaption>原始（第 1 页）</figcaption><canvas id="canvasOriginal"></canvas></figure>
+          <figure><figcaption id="compressedCaption">压缩后（第 1 页）</figcaption><canvas id="canvasCompressed"></canvas></figure>
+        </div>
+      </div>
+
+      <div class="progress-wrap hidden" id="compressProgress">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-text"></div>
+      </div>
+      <div class="result-card hidden" id="compressResult"></div>
+    </div>
+    </div>
+
+    <!-- 页面排序 -->
+    <div id="tab-reorder" class="doc-pane">
+    <div class="dropzone" id="reorderDrop">
+      <input type="file" id="reorderInput" accept=".pdf,application/pdf" hidden>
+      <div class="dz-icon">🔀</div>
+      <div class="dz-title">拖入或点击选择 PDF 文件</div>
+      <div class="dz-sub">拖动页面缩略图调整顺序，可删除不需要的页面</div>
+    </div>
+
+    <div id="reorderBody" class="hidden">
+      <div class="file-card" id="reorderFileCard"></div>
+      <div class="actions-row">
+        <button class="btn btn-primary" id="btnExportReorder">导出 PDF</button>
+        <button class="btn btn-secondary" id="btnReverse">倒序排列</button>
+        <button class="btn btn-secondary" id="btnResetOrder">重置顺序</button>
+        <button class="btn btn-ghost btn-reset" data-reset="reorder">换个文件</button>
+        <span class="thumb-size-ctl" title="调整缩略图显示大小">
+          缩略图
+          <span class="seg">
+            <button class="seg-btn ts-btn" data-tsize="s">小</button>
+            <button class="seg-btn ts-btn" data-tsize="m">中</button>
+            <button class="seg-btn ts-btn" data-tsize="l">大</button>
+          </span>
+        </span>
+      </div>
+      <p class="hint" id="reorderHint">拖动缩略图或模块卡片调整顺序；点击缩略图右上角 × 删除页面；模块可改名、可解散。</p>
+
+      <div class="range-move">
+        <span class="rm-label">区间成组：</span>
+        将第 <input type="number" id="mFrom" min="1" value="1" class="rm-input"> 至
+        第 <input type="number" id="mTo" min="1" value="1" class="rm-input"> 页设为一个模块
+        <input type="text" id="mName" class="rm-input rm-name" placeholder="模块名称（可留空）" maxlength="12">
+        <button class="btn btn-secondary" id="btnMakeModule">创建模块</button>
+        <span class="rm-tip">小技巧：先后点击两张缩略图可快速填入起止页</span>
+      </div>
+
+      <div class="thumb-grid" id="thumbGrid"></div>
+      <div class="progress-wrap hidden" id="reorderProgress">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-text"></div>
+      </div>
+      <div class="result-card hidden" id="reorderResult"></div>
+    </div>
+    </div>
+
+    <!-- 文档编辑 -->
+    <div id="tab-edit" class="doc-pane">
+    <div class="dropzone" id="editDrop">
+      <input type="file" id="editInput" accept=".pdf,application/pdf" hidden>
+      <div class="dz-icon">✏️</div>
+      <div class="dz-title">拖入或点击选择 PDF 文件</div>
+      <div class="dz-sub">马赛克 · 画框 · 高亮 · 划线 · 手绘 · 遮盖与改文案（Word 文档请先转为 PDF）</div>
+    </div>
+
+    <div id="editBody" class="hidden">
+      <div class="file-card" id="editFileCard"></div>
+
+      <div class="edit-toolbar">
+        <div class="tool-group" id="toolGroup">
+          <button class="tool-btn" data-tool="mosaic" title="拖出矩形区域打码">🧊 马赛克</button>
+          <button class="tool-btn" data-tool="rect" title="框选标出某区域">⬜ 矩形框</button>
+          <button class="tool-btn" data-tool="highlight" title="半透明高亮区域">🖍️ 高亮</button>
+          <button class="tool-btn" data-tool="line" title="画直线 / 给文字划线">📏 直线</button>
+          <button class="tool-btn" data-tool="pen" title="自由手绘">✍️ 手绘</button>
+          <button class="tool-btn" data-tool="whiteout" title="白色遮盖，用于覆盖原内容">⬛ 遮盖</button>
+          <button class="tool-btn" data-tool="text" title="点击页面输入文字">🅰️ 文字</button>
+          <button class="tool-btn" data-tool="picker" title="点击页面任意位置取色，自动设为当前标注颜色">🎯 拾色器</button>
+        </div>
+        <div class="tool-opts">
+          <label class="opt-item" title="颜色">颜色 <input type="color" id="edColor" value="#e02020"></label>
+          <label class="opt-item" title="线条粗细">粗细 <input type="range" id="edWidth" min="1" max="14" value="3"><b id="edWidthVal">3</b></label>
+          <label class="opt-item" title="文字大小">字号 <input type="range" id="edFontSize" min="10" max="48" value="18"><b id="edFontVal">18</b></label>
+        </div>
+        <div class="tool-actions">
+          <button class="btn btn-ghost btn-sm" id="btnEdUndo" title="撤销 (Ctrl/⌘+Z)">↩ 撤销</button>
+          <button class="btn btn-ghost btn-sm" id="btnEdRedo" title="重做 (Ctrl/⌘+Shift+Z)">↪ 重做</button>
+          <button class="btn btn-ghost btn-sm" id="btnEdClear">清除本页</button>
+        </div>
+      </div>
+
+      <div class="edit-nav">
+        <button class="btn btn-secondary btn-sm" id="btnEdPrev">‹ 上一页</button>
+        <span class="ed-pageinfo">第 <input type="number" id="edPageInput" min="1" value="1" class="rm-input"> / <span id="edPageTotal">1</span> 页 <span id="edEditedInfo" class="ed-edited"></span></span>
+        <button class="btn btn-secondary btn-sm" id="btnEdNext">下一页 ›</button>
+        <span class="ed-spacer"></span>
+        <label class="switch-label" title="将已编辑页整页转为图片，彻底移除被马赛克/遮盖内容的原始文字，防止被复制提取">
+          <input type="checkbox" id="edFlatten"> 扁平化已编辑页
+        </label>
+        <button class="btn btn-primary" id="btnEdExport">导出 PDF</button>
+        <button class="btn btn-ghost btn-reset" data-reset="edit">换个文件</button>
+      </div>
+      <p class="hint">改文案：先用「遮盖」盖住原文字，再用「文字」在原处输入新内容；划线用「直线」工具。默认标注以矢量叠加、原文字层保持可选中；<b>马赛克/遮盖仅遮挡显示，被盖住的文字仍可被复制提取</b>——勾选「扁平化已编辑页」可将这些页整页转为图片、彻底移除（打码时会自动勾选）。</p>
+
+      <div class="edit-stage" id="editStage">
+        <canvas id="editCanvas"></canvas>
+        <input type="text" id="edTextInput" class="ed-text-input hidden" placeholder="输入文字，回车确认">
+      </div>
+
+      <div class="progress-wrap hidden" id="editProgress">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-text"></div>
+      </div>
+      <div class="result-card hidden" id="editResult"></div>
+    </div>
+    </div>
+  </section>
+
+  <!-- ============ 压缩解压 ============ -->
+  <section id="tab-archive" class="tab-panel">
+    <div class="seg im-modes">
+      <button class="seg-btn ar-tab active" data-armode="pack">📦 压缩打包</button>
+      <button class="seg-btn ar-tab" data-armode="unpack">📂 解压</button>
+    </div>
+
+    <!-- 压缩打包 -->
+    <div id="arPackPane">
+      <div class="dropzone dz-compact" id="packDrop">
+        <input type="file" id="packInput" multiple hidden>
+        <input type="file" id="packDirInput" webkitdirectory hidden>
+        <div class="dz-icon">📦</div>
+        <div class="dz-title">拖入文件或文件夹（可多个、可多次追加），或点击选择文件</div>
+        <div class="dz-sub">拖入文件夹会保留目录结构；也可以 <a id="packAddDir" href="javascript:void 0">点此选择整个文件夹</a></div>
+      </div>
+
+      <div id="packBody" class="hidden">
+        <div class="ar-summary" id="packSummary"></div>
+        <div class="ar-list" id="packList"></div>
+        <div class="range-move">
+          <span class="rm-label">打包为</span>
+          <input type="text" id="zipName" class="rm-input rm-name" value="压缩包" maxlength="60"> .zip
+          <span class="rm-label" style="margin-left:8px">压缩级别</span>
+          <select id="zipLevel" class="rm-select">
+            <option value="1">快速（体积较大）</option>
+            <option value="6" selected>标准</option>
+            <option value="9">最大压缩（较慢）</option>
+          </select>
+          <button class="btn btn-primary" id="btnPack">打包下载 ZIP</button>
+          <button class="btn btn-ghost btn-sm" id="btnPackClear">清空列表</button>
+        </div>
+        <div class="progress-wrap hidden" id="packProgress">
+          <div class="progress-bar"><div class="progress-fill"></div></div>
+          <div class="progress-text"></div>
+        </div>
+        <div class="result-card hidden" id="packResult"></div>
+      </div>
+    </div>
+
+    <!-- 解压 -->
+    <div id="arUnpackPane" class="hidden">
+      <div class="dropzone" id="unpackDrop">
+        <input type="file" id="unpackInput" accept=".zip,.gz,.tar,.tgz,application/zip,application/gzip,application/x-tar" hidden>
+        <div class="dz-icon">📂</div>
+        <div class="dz-title">拖入或点击选择压缩包</div>
+        <div class="dz-sub">支持 <b>.zip</b> / <b>.gz</b> / <b>.tar</b> / <b>.tar.gz</b>（.tgz）；加密压缩包暂不支持</div>
+      </div>
+
+      <div id="unpackBody" class="hidden">
+        <div class="file-card" id="unpackCard"></div>
+        <div class="actions-row">
+          <button class="btn btn-primary" id="btnExtractAll">全部解压到文件夹…</button>
+          <button class="btn btn-secondary" id="btnDownloadAll">逐个下载全部</button>
+          <button class="btn btn-ghost btn-reset" data-reset="archive">换个压缩包</button>
+        </div>
+        <p class="hint">「全部解压到文件夹」将按原目录结构写入你选择的本地文件夹（需 Chrome / Edge）；单个文件可在列表中直接点「下载」。</p>
+        <div class="ar-list" id="unpackList"></div>
+        <div class="progress-wrap hidden" id="unpackProgress">
+          <div class="progress-bar"><div class="progress-fill"></div></div>
+          <div class="progress-text"></div>
+        </div>
+        <div class="result-card hidden" id="unpackResult"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 图片工具 ============ -->
+  <section id="tab-image" class="tab-panel">
+    <div class="dropzone" id="imageDrop">
+      <input type="file" id="imageInput" accept="image/*" hidden>
+      <div class="dz-icon">🖼️</div>
+      <div class="dz-title">拖入 / 粘贴（Ctrl+V）/ 点击选择图片</div>
+      <div class="dz-sub">格式转换 · 压缩 · 裁剪 · 加 / 去水印，可链式操作后一次导出</div>
+    </div>
+
+    <div id="imageBody" class="hidden">
+      <div class="file-card" id="imageFileCard"></div>
+
+      <div class="seg im-modes">
+        <button class="seg-btn im-tab active" data-imode="convert">格式转换</button>
+        <button class="seg-btn im-tab" data-imode="compress">压缩</button>
+        <button class="seg-btn im-tab" data-imode="crop">裁剪</button>
+        <button class="seg-btn im-tab" data-imode="wm">水印</button>
+      </div>
+
+      <div class="image-layout">
+        <div class="image-stage" id="imageStage">
+          <canvas id="imageCanvas"></canvas>
+        </div>
+
+        <aside class="image-panel">
+          <!-- 格式转换 -->
+          <div class="im-pane" id="imPaneConvert">
+            <div class="im-row"><span class="im-label">目标格式</span>
+              <select id="cvFormat" class="rm-select">
+                <option value="image/png">PNG（无损）</option>
+                <option value="image/jpeg">JPEG</option>
+                <option value="image/webp">WebP</option>
+              </select>
+            </div>
+            <div class="im-row" id="cvQualityRow"><span class="im-label">质量</span>
+              <input type="range" id="cvQuality" min="30" max="100" value="92"><b id="cvQualityVal">92</b>%
+            </div>
+            <div class="estimate-line-sm" id="cvEstimate">预计输出：—</div>
+            <button class="btn btn-primary im-full" id="btnCvExport">转换并下载</button>
+            <p class="hint">JPEG 不支持透明通道，透明区域会自动填充为白色。</p>
+          </div>
+
+          <!-- 压缩 -->
+          <div class="im-pane hidden" id="imPaneCompress">
+            <div class="im-row"><span class="im-label">质量</span>
+              <input type="range" id="imQuality" min="20" max="95" value="72"><b id="imQualityVal">72</b>%
+            </div>
+            <div class="im-row"><span class="im-label">尺寸</span>
+              <input type="range" id="imScale" min="10" max="100" step="5" value="100"><b id="imScaleVal">100</b>%
+            </div>
+            <div class="im-row"><span class="im-label">格式</span>
+              <select id="imCpFormat" class="rm-select">
+                <option value="image/jpeg">JPEG</option>
+                <option value="image/webp">WebP</option>
+              </select>
+            </div>
+            <div class="estimate-line-sm" id="imEstimate">—</div>
+            <button class="btn btn-primary im-full" id="btnImCompress">压缩并下载</button>
+          </div>
+
+          <!-- 裁剪 -->
+          <div class="im-pane hidden" id="imPaneCrop">
+            <div class="im-row"><span class="im-label">比例</span>
+              <span class="ratio-chips">
+                <button class="ratio-chip active" data-ratio="0">自由</button>
+                <button class="ratio-chip" data-ratio="1">1:1</button>
+                <button class="ratio-chip" data-ratio="1.3333">4:3</button>
+                <button class="ratio-chip" data-ratio="1.7778">16:9</button>
+                <button class="ratio-chip" data-ratio="0.75">3:4</button>
+                <button class="ratio-chip" data-ratio="0.5625">9:16</button>
+              </span>
+            </div>
+            <div class="estimate-line-sm" id="cropInfo">在图片上拖拽框选裁剪区域</div>
+            <div class="im-btn-row">
+              <button class="btn btn-primary" id="btnApplyCrop" disabled>应用裁剪</button>
+              <button class="btn btn-ghost btn-sm" id="btnCancelSel">取消选区</button>
+            </div>
+            <p class="hint">拖动四角可调整大小，拖动选区内部可移动位置；应用后可撤销。</p>
+            <button class="btn btn-secondary im-full" id="btnImExportCrop">导出当前图片</button>
+          </div>
+
+          <!-- 水印 -->
+          <div class="im-pane hidden" id="imPaneWm">
+            <div class="seg wm-seg">
+              <button class="seg-btn wm-mode active" data-wm="add">添加水印</button>
+              <button class="seg-btn wm-mode" data-wm="remove">移除水印</button>
+            </div>
+
+            <div id="wmAddPane">
+              <div class="im-row"><span class="im-label">文字</span>
+                <input type="text" id="wmText" class="rm-input rm-name im-grow" value="仅供内部使用" maxlength="30">
+              </div>
+              <div class="im-row"><span class="im-label">大小</span>
+                <input type="range" id="wmSize" min="2" max="15" step="0.5" value="5"><b id="wmSizeVal"></b>
+              </div>
+              <div class="im-row"><span class="im-label">颜色</span>
+                <input type="color" id="wmColor" value="#e02020">
+                <span class="im-label" style="margin-left:10px">透明度</span>
+                <input type="range" id="wmOpacity" min="5" max="80" value="28"><b id="wmOpacityVal">28</b>%
+              </div>
+              <div class="im-row"><span class="im-label">角度</span>
+                <input type="range" id="wmAngle" min="-90" max="90" value="-30"><b id="wmAngleVal">-30</b>°
+              </div>
+              <div class="im-row"><span class="im-label">模式</span>
+                <label class="switch-label"><input type="checkbox" id="wmTile" checked> 全屏平铺</label>
+                <select id="wmPos" class="rm-select hidden">
+                  <option value="br">右下</option><option value="bc">底部居中</option><option value="bl">左下</option>
+                  <option value="mc">正中</option><option value="tr">右上</option><option value="tl">左上</option>
+                </select>
+              </div>
+              <button class="btn btn-primary im-full" id="btnWmApply">应用水印</button>
+              <p class="hint">画布中为实时预览，点「应用水印」后写入图片（可撤销）。</p>
+            </div>
+
+            <div id="wmRemovePane" class="hidden">
+              <div class="im-row"><span class="im-label">方式</span>
+                <label class="switch-label"><input type="radio" name="wmFix" value="fill" checked> 平滑填充</label>
+                <label class="switch-label"><input type="radio" name="wmFix" value="mosaic"> 马赛克</label>
+              </div>
+              <div class="estimate-line-sm" id="wmRmInfo">在图片上拖拽框选要移除的水印区域</div>
+              <div class="im-btn-row">
+                <button class="btn btn-primary" id="btnWmFix" disabled>修复此区域</button>
+                <button class="btn btn-ghost btn-sm" id="btnWmCancelSel">取消选区</button>
+              </div>
+              <p class="hint">「平滑填充」按周边像素插值修复，适合纯色/渐变背景；复杂背景可改用「马赛克」遮盖。可多次框选逐个处理，支持撤销。</p>
+            </div>
+            <button class="btn btn-secondary im-full" id="btnImExportWm">导出当前图片</button>
+          </div>
+
+          <div class="im-common">
+            <button class="btn btn-ghost btn-sm" id="btnImUndo" disabled>↩ 撤销</button>
+            <button class="btn btn-ghost btn-sm" id="btnImRestore">重置为原图</button>
+            <button class="btn btn-ghost btn-sm btn-reset" data-reset="image">换个图片</button>
+          </div>
+          <div class="im-meta" id="imMeta"></div>
+        </aside>
+      </div>
+
+      <div class="result-card hidden" id="imageResult"></div>
+    </div>
+  </section>
+
+  <!-- ============ 拾色器 ============ -->
+  <section id="tab-picker" class="tab-panel">
+    <div class="dropzone" id="pickerDrop">
+      <input type="file" id="pickerInput" accept="image/*" hidden>
+      <div class="dz-icon">🎯</div>
+      <div class="dz-title">拖入 / 粘贴（Ctrl+V）/ 点击选择图片</div>
+      <div class="dz-sub">在图片上移动查看像素放大镜，点击取色；也可以直接使用右侧「屏幕取色」</div>
+    </div>
+
+    <div class="picker-layout">
+      <div class="picker-canvas-wrap" id="pickerCanvasWrap">
+        <div id="pickerEmpty" class="picker-empty">尚未加载图片<br><span>可先使用右侧「屏幕取色」或直接输入色值</span></div>
+        <canvas id="pickerCanvas" class="hidden"></canvas>
+        <div id="loupe" class="loupe hidden">
+          <canvas id="loupeCanvas" width="110" height="110"></canvas>
+          <div class="loupe-hex" id="loupeHex">#FFFFFF</div>
+        </div>
+      </div>
+
+      <aside class="picker-panel">
+        <div class="pp-actions">
+          <button class="btn btn-primary" id="btnScreenGrab" title="截取所选屏幕/窗口到画布，移动鼠标实时显示色值">🖥️ 截屏实时取色</button>
+          <button class="btn btn-secondary" id="btnEyeDropper" title="系统吸管：快速吸取屏幕任意位置颜色（浏览器自带放大镜）">💧 快速取色</button>
+          <button class="btn btn-ghost hidden" id="btnPickerClear">清除画面</button>
+        </div>
+        <div class="pp-swatch-row">
+          <div class="pp-swatch" id="ppSwatch" title="点击复制 HEX"></div>
+          <input id="ppHexInput" class="pp-hex-input" value="#3B6CF0" maxlength="7" spellcheck="false" title="手动输入 HEX 色值">
+        </div>
+        <div class="pp-values">
+          <div class="pp-row"><span class="pp-label">HEX</span><code id="ppHex">#3B6CF0</code><button class="pp-copy" data-copy="hex">复制</button></div>
+          <div class="pp-row"><span class="pp-label">RGB</span><code id="ppRgb">rgb(59, 108, 240)</code><button class="pp-copy" data-copy="rgb">复制</button></div>
+          <div class="pp-row"><span class="pp-label">HSL</span><code id="ppHsl">hsl(224, 86%, 59%)</code><button class="pp-copy" data-copy="hsl">复制</button></div>
+        </div>
+        <div class="pp-history-head">最近取色 <button class="pp-clear-history" id="btnClearHistory">清空</button></div>
+        <div class="pp-history" id="ppHistory"></div>
+        <p class="hint">「截屏实时取色」把所选屏幕 / 窗口画面截取到左侧画布，移动鼠标即可<b>实时显示色值</b>；「快速取色」使用系统吸管一次取色（吸管自带放大镜）。在图片上悬停时右侧面板同样实时刷新，点击才计入历史。</p>
+      </aside>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container">全能工具箱 · 所有处理均在您的浏览器本地完成，文件不会上传到任何服务器</div>
+</footer>
+
+<div id="toast" class="toast hidden"></div>
+
+<!-- 页面放大预览灯箱 -->
+<div id="lightbox" class="lightbox hidden">
+  <button class="lb-btn lb-close" title="关闭（Esc）">×</button>
+  <button class="lb-btn lb-prev" title="上一页（←）">‹</button>
+  <div class="lb-stage"><canvas id="lbCanvas"></canvas></div>
+  <button class="lb-btn lb-next" title="下一页（→）">›</button>
+  <div class="lb-caption" id="lbCaption"></div>
+</div>
+
+<script src="vendor/jszip.min.js?v=4"></script>
+<script src="vendor/docx-preview.min.js?v=4"></script>
+<script src="vendor/pdf.min.js?v=4"></script>
+<script src="vendor/pdf-lib.min.js?v=4"></script>
+<script src="vendor/fontkit.umd.min.js?v=4"></script>
+<script src="vendor/html2canvas.min.js?v=4"></script>
+<script src="vendor/Sortable.min.js?v=4"></script>
+<script src="js/subset.js?v=1"></script>
+<script src="js/app.js?v=13"></script>
+<script src="js/editor.js?v=6"></script>
+<script src="js/picker.js?v=2"></script>
+<script src="js/image.js?v=1"></script>
+<script src="js/archive.js?v=2"></script>
+</body>
+</html>
