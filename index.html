@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>全能工具箱 — 文档 · 图片 · 压缩 · 取色</title>
+<title>全能工具箱 — 文档 · 图片 · 音视频 · 压缩 · 取色</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
 <script>
 /* 首屏前应用已保存主题，避免闪烁；默认跟随系统 */
@@ -17,7 +17,7 @@
   } catch (e) { document.documentElement.dataset.theme = 'light'; }
 })();
 </script>
-<link rel="stylesheet" href="css/style.css?v=11">
+<link rel="stylesheet" href="css/style.css?v=12">
 </head>
 <body>
 
@@ -27,7 +27,7 @@
       <div class="brand-mark">📄</div>
       <div>
         <h1>全能工具箱</h1>
-        <p class="brand-sub">文档处理 · 图片工具 · 压缩解压 · 拾色器 — 一站式本地工具</p>
+        <p class="brand-sub">文档处理 · 图片工具 · 视频转音频 · 压缩解压 · 拾色器 — 一站式本地工具</p>
       </div>
     </div>
     <div class="header-right">
@@ -47,6 +47,7 @@
   <div class="tabs" role="tablist">
     <button class="tab active" data-tab="doc" role="tab">📄 文档工具</button>
     <button class="tab" data-tab="image" role="tab">🖼️ 图片工具</button>
+    <button class="tab" data-tab="video" role="tab">🎬 视频转音频</button>
     <button class="tab" data-tab="archive" role="tab">📦 压缩解压</button>
     <button class="tab" data-tab="picker" role="tab">🎯 拾色器</button>
   </div>
@@ -493,6 +494,53 @@
     </div>
   </section>
 
+  <!-- ============ 视频转音频 ============ -->
+  <section id="tab-video" class="tab-panel">
+    <div class="dropzone" id="videoDrop">
+      <input type="file" id="videoInput" accept="video/*,.mp4,.mov,.webm,.mkv,.avi,.flv,.wmv,.ts,.m2ts,.3gp,.mpg,.mpeg,.rm,.rmvb" hidden>
+      <div class="dz-icon">🎬</div>
+      <div class="dz-title">拖入或点击选择视频文件</div>
+      <div class="dz-sub">支持 <b>MP4 / MOV / WebM / MKV / AVI / FLV / TS / WMV</b> 等常见格式 · 提取音轨并转换为所选音频格式，全程本地完成</div>
+    </div>
+
+    <div id="videoBody" class="hidden">
+      <div class="file-card" id="videoCard"></div>
+      <video id="videoPreview" class="video-preview" controls preload="metadata"></video>
+
+      <div class="range-move">
+        <span class="rm-label">音频格式</span>
+        <select id="audioFormat" class="rm-select">
+          <option value="mp3" selected>MP3（通用，推荐）</option>
+          <option value="m4a">M4A（AAC）</option>
+          <option value="wav">WAV（无损 PCM）</option>
+          <option value="flac">FLAC（无损压缩）</option>
+          <option value="ogg">OGG（Vorbis）</option>
+        </select>
+        <span class="rm-label">音质</span>
+        <select id="audioBitrate" class="rm-select">
+          <option value="128">128 kbps（较小）</option>
+          <option value="192" selected>192 kbps（标准）</option>
+          <option value="256">256 kbps（较高）</option>
+          <option value="320">320 kbps（最高）</option>
+        </select>
+        <button class="btn btn-primary" id="btnV2A">🎵 提取并转换</button>
+        <button class="btn btn-ghost btn-sm hidden" id="btnV2ACancel">取消</button>
+        <button class="btn btn-ghost btn-reset" data-reset="video">换个文件</button>
+      </div>
+      <p class="hint">首次使用需加载本地转换引擎（约 31 MB，仅一次，之后走浏览器缓存）；转换全程在本地进行，文件不会上传。过大的视频（超过约 1 GB）可能因浏览器内存不足而失败。</p>
+
+      <div class="progress-wrap hidden" id="videoProgress">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-text"></div>
+      </div>
+      <div class="result-card hidden" id="videoResult"></div>
+      <div class="audio-preview-wrap hidden" id="audioPreviewWrap">
+        <span class="rm-label">试听</span>
+        <audio id="audioPreview" controls></audio>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ 拾色器 ============ -->
   <section id="tab-picker" class="tab-panel">
     <div class="dropzone" id="pickerDrop">
@@ -559,10 +607,12 @@
 <script src="vendor/html2canvas.min.js?v=4"></script>
 <script src="vendor/Sortable.min.js?v=4"></script>
 <script src="js/subset.js?v=1"></script>
-<script src="js/app.js?v=13"></script>
+<script src="js/app.js?v=15"></script>
 <script src="js/editor.js?v=6"></script>
 <script src="js/picker.js?v=2"></script>
 <script src="js/image.js?v=1"></script>
 <script src="js/archive.js?v=2"></script>
+<script src="vendor/ffmpeg/ffmpeg.js?v=1"></script>
+<script src="js/video.js?v=7"></script>
 </body>
 </html>

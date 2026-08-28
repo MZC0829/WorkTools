@@ -687,3 +687,26 @@ main { flex: 1; padding-bottom: 48px; }
 /* 伪元素文字（如 docx 列表编号）保留在底图中，避免内容丢失 */
 .pdf-notext *::before, .pdf-notext *::after, .pdf-notext *::marker { color: #000 !important; }
 .pdf-num-off::before { content: none !important; }
+
+/* ---------------- 视频转音频 ---------------- */
+.video-preview {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  max-height: 320px;
+  margin: 14px 0 4px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #000;
+}
+.audio-preview-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.audio-preview-wrap audio {
+  flex: 1;
+  max-width: 560px;
+  height: 40px;
+}

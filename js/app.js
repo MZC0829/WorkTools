@@ -222,6 +222,8 @@ $$('.btn-reset').forEach(btn => btn.addEventListener('click', () => {
   else if (which === 'reorder') resetReorder();
   else if (which === 'edit' && App.editor && App.editor.reset) App.editor.reset();
   else if (which === 'image' && App.image && App.image.reset) App.image.reset();
+  else if (which === 'video' && App.video && App.video.reset) App.video.reset();
+  else if (which === 'archive' && App.archive && App.archive.reset) App.archive.reset();
 }));
 
 /* ==========================================================================
@@ -682,8 +684,8 @@ function fontFlagsOf(page, fontName, cache) {
   return f;
 }
 
-/* 提取页面图片及其位置（CTM 追踪）；全页背景图与过小图剔除 */
-async function extractPageImages(page, pageTextChars, opList) {
+/* 提取页面图片及其位置（CTM 追踪，坐标按 /Rotate 归一化）；全页背景图与过小图剔除 */
+async function extractPageImages(page, pageTextChars, opList, rot) {
   const O = pdfjsLib.OPS;
   const vp1 = page.getViewport({ scale: 1 });
   const pageArea = vp1.width * vp1.height;
@@ -702,7 +704,10 @@ async function extractPageImages(page, pageTextChars, opList) {
     const hPt = Math.hypot(ctm[2], ctm[3]);
     if (wPt < 12 || hPt < 12) return;
     if (wPt * hPt > pageArea * 0.8 && pageTextChars > 100) return; // 全页背景图
-    images.push({ img, isMask, wPt, hPt, y: ctm[5] + hPt });
+    // 锚点按 /Rotate 归一化（与文字用同一套坐标），y 取归一化后的上边缘
+    const y = rot === 90 ? -ctm[4] : rot === 180 ? -ctm[5] : rot === 270 ? ctm[4] + wPt : ctm[5] + hPt;
+    const swap = rot === 90 || rot === 270;
+    images.push({ img, isMask, wPt: swap ? hPt : wPt, hPt: swap ? wPt : hPt, y });
   };
   for (let i = 0; i < opList.fnArray.length && images.length < 20; i++) {
     const fn = opList.fnArray[i], args = opList.argsArray[i];
@@ -746,8 +751,9 @@ async function extractPageImages(page, pageTextChars, opList) {
   return images;
 }
 
-/* pdf.js 图像对象 → PNG 字节；isMask 为 1bpp 图像蒙版（置位=黑，inverseDecode 取反） */
-async function pdfImgToPng(img, isMask) {
+/* pdf.js 图像对象 → PNG 字节；isMask 为 1bpp 图像蒙版（置位=黑，inverseDecode 取反）；
+ * rot 为页面 /Rotate 角度，按其顺时针旋转位图，使图片与阅读器中所见方向一致 */
+async function pdfImgToPng(img, isMask, rot) {
   const canvas = document.createElement('canvas');
   const ctx2 = canvas.getContext('2d');
   if (img.bitmap) {
@@ -796,8 +802,22 @@ async function pdfImgToPng(img, isMask) {
     } else return null;
     ctx2.putImageData(out, 0, 0);
   } else return null;
-  const blob = await canvasToBlobAs(canvas, 'image/png');
+  const out = rot ? rotateCanvas(canvas, rot) : canvas;
+  const blob = await canvasToBlobAs(out, 'image/png');
   return new Uint8Array(await blob.arrayBuffer());
+}
+
+/* 顺时针旋转画布 90 / 180 / 270 度 */
+function rotateCanvas(src, deg) {
+  const swap = deg === 90 || deg === 270;
+  const dst = document.createElement('canvas');
+  dst.width = swap ? src.height : src.width;
+  dst.height = swap ? src.width : src.height;
+  const c = dst.getContext('2d');
+  c.translate(dst.width / 2, dst.height / 2);
+  c.rotate(deg * Math.PI / 180);
+  c.drawImage(src, -src.width / 2, -src.height / 2);
+  return dst;
 }
 
 /* 页面 → 结构化块（段落含富格式 runs + 图片），坐标已按 /Rotate 归一化 */
@@ -858,14 +878,20 @@ async function extractPageBlocks(page) {
     const gaps = [];
     for (let i = 1; i < sorted.length; i++) gaps.push(sorted[i - 1].y - sorted[i].y);
     gaps.sort((a, b) => a - b);
-    // 用下四分位数代表典型行距（行数少时中位数会被段间大间隙带偏），并以行高兜底
-    const baseGap = gaps.length ? gaps[Math.floor(gaps.length * 0.25)] : 0;
+    // 用下四分位数代表典型行距（行数少时中位数会被段间大间隙带偏），并以行高兜底；
+    // 页面行数少时下四分位数本身可能就是段间距，再按最大行高封顶，避免阈值被抬高
+    const hMaxPage = sorted.reduce((m, L) => Math.max(m, L.h), 0);
+    const baseGap = gaps.length ? Math.min(gaps[Math.floor(gaps.length * 0.25)], hMaxPage * 1.35) : 0;
     let cur = null;
     const flushPara = () => { if (cur) paras.push(cur); cur = null; };
     for (let i = 0; i < sorted.length; i++) {
       const L = sorted[i];
-      const gap = cur ? sorted[i - 1].y - L.y : 0;
-      const newPara = !cur || gap > Math.max(L.h * 1.9, baseGap * 1.45 + 1);
+      const prevL = i ? sorted[i - 1] : null;
+      const gap = cur ? prevL.y - L.y : 0;
+      const hPair = prevL ? Math.max(prevL.h, L.h) : L.h;
+      // 字号突变（标题 → 正文）本身就是段落边界，仅看行距会把标题并进正文
+      const sizeShift = !!prevL && Math.abs(prevL.h - L.h) > hPair * 0.2;
+      const newPara = !cur || sizeShift || gap > Math.max(hPair * 1.9, baseGap * 1.45 + 1);
       if (newPara) {
         flushPara();
         cur = { kind: 'p', y: L.y, runs: L.runs.map(r => ({ ...r })), left: L.left, right: L.right };
@@ -887,12 +913,17 @@ async function extractPageBlocks(page) {
     flushPara();
   }
 
-  // 4) 对齐推断（相对本页文字包络）
+  // 4) 对齐推断（相对页面版心：以文字包络为基准会让最宽的一段恒为 rg=0，
+  //    导致居中标题被误判成右对齐）
   if (paras.length) {
-    const minX = Math.min(...paras.map(p => p.left));
-    const maxX = Math.max(...paras.map(p => p.right));
+    const [vx0, vy0, vx1, vy1] = page.view;
+    // 版心的 x 轴需与第 1 步的旋转归一化保持一致
+    const [px0, px1] = rot === 90 ? [vy0, vy1] : rot === 180 ? [-vx1, -vx0]
+                     : rot === 270 ? [-vy1, -vy0] : [vx0, vx1];
+    const margin = Math.max(0, Math.min(...paras.map(p => p.left)) - px0);
+    const areaL = px0 + margin, areaR = px1 - margin;
     for (const p of paras) {
-      const lg = p.left - minX, rg = maxX - p.right;
+      const lg = p.left - areaL, rg = areaR - p.right;
       if (lg > 24 && rg > 24 && Math.abs(lg - rg) < Math.max(10, (lg + rg) * 0.12)) p.align = 'center';
       else if (rg < 6 && lg > 48) p.align = 'right';
     }
@@ -901,17 +932,15 @@ async function extractPageBlocks(page) {
   // 5) 图片提取并按 y 归并
   const textChars = paras.reduce((n, p) => n + p.runs.reduce((m, r) => m + r.text.length, 0), 0);
   let blocks = paras;
-  if (rot === 0) {
-    try {
-      const imgs = opList ? await extractPageImages(page, textChars, opList) : [];
-      const imgBlocks = [];
-      for (const im2 of imgs) {
-        const png = await pdfImgToPng(im2.img, im2.isMask);
-        if (png) imgBlocks.push({ kind: 'img', y: im2.y, png, wPt: im2.wPt, hPt: im2.hPt });
-      }
-      blocks = [...paras, ...imgBlocks].sort((a, b) => b.y - a.y);
-    } catch (e) { console.warn('图片提取失败，仅输出文字:', e); }
-  }
+  try {
+    const imgs = opList ? await extractPageImages(page, textChars, opList, rot) : [];
+    const imgBlocks = [];
+    for (const im2 of imgs) {
+      const png = await pdfImgToPng(im2.img, im2.isMask, rot);
+      if (png) imgBlocks.push({ kind: 'img', y: im2.y, png, wPt: im2.wPt, hPt: im2.hPt });
+    }
+    blocks = [...paras, ...imgBlocks].sort((a, b) => b.y - a.y);
+  } catch (e) { console.warn('图片提取失败，仅输出文字:', e); }
   return blocks;
 }
 
@@ -919,6 +948,10 @@ function xmlEscape(s) {
   return s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+/* 版心尺寸，须与 buildDocxBlob 末尾 w:sectPr 的页面/页边距设置一致（twips → pt） */
+const DOCX_MAX_W_PT = (11906 - 2880) / 20;   // 451.3 pt
+const DOCX_MAX_H_PT = (16838 - 2880) / 20;   // 697.9 pt
 
 /* 结构化块 → .docx（富格式 runs + 内嵌图片） */
 async function buildDocxBlob(pagesBlocks) {
@@ -931,7 +964,10 @@ async function buildDocxBlob(pagesBlocks) {
       if (b.kind === 'img') {
         const idx = mediaFiles.length + 1;
         mediaFiles.push(b.png);
-        const cx = Math.round(b.wPt * 12700), cy = Math.round(b.hPt * 12700);
+        // 缩放到版心之内（与下方 w:sectPr 的 A4 纵向 + 1 英寸页边距保持一致），
+        // 否则整页扫描图会超出右/下边界被裁掉；只缩不放
+        const k = Math.min(1, DOCX_MAX_W_PT / b.wPt, DOCX_MAX_H_PT / b.hPt);
+        const cx = Math.round(b.wPt * k * 12700), cy = Math.round(b.hPt * k * 12700);
         body += `<w:p><w:pPr><w:spacing w:after="160"/></w:pPr><w:r><w:drawing>` +
           `<wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0">` +
           `<wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${idx}" name="image${idx}"/>` +
