@@ -1,5 +1,6 @@
 /* ==========================================================================
- * 视频转音频（本地 ffmpeg.wasm，单线程核心，无需服务器）
+ * 音视频工具：视频转音频 + 音频格式转换（本地 ffmpeg.wasm，单线程核心，无需服务器）
+ * 两个子模式共用同一个转换引擎（只加载一次）。
  * 依赖 vendor/ffmpeg/：ffmpeg.js（主线程 UMD）+ 814.ffmpeg.js（worker）
  *                    + ffmpeg-core.js / ffmpeg-core.wasm（转换核心，懒加载）
  * ========================================================================== */
@@ -22,96 +23,21 @@ const FORMATS = {
           args: b => ['-c:a', 'libvorbis', '-q:a', OGG_QUALITY[b] || '6'] },
 };
 
-const vd = {
-  file: null, duration: 0,
+/* ---------------- 共享引擎状态（两个子模式互斥使用） ---------------- */
+const eng = {
   ffmpeg: null, pendingFf: null, loadPromise: null, abort: null,
-  busy: false, cancelled: false,
+  busy: false, owner: null,          // owner: 当前转换任务所属子模式的 key
+  cancelled: false,
   lastLogs: [], onProgress: null,
-  previewUrl: null, audioUrl: null,
+  progWrap: null,                     // 当前任务的进度条容器（引擎加载进度也画在这里）
 };
-App.video = vd;
-
-const drop = $('#videoDrop');
-const body = $('#videoBody');
-const progWrap = $('#videoProgress');
-const resultEl = $('#videoResult');
-const btnConvert = $('#btnV2A');
-const btnCancel = $('#btnV2ACancel');
-const videoEl = $('#videoPreview');
-const audioWrap = $('#audioPreviewWrap');
-const audioEl = $('#audioPreview');
-const fmtSelect = $('#audioFormat');
-const brSelect = $('#audioBitrate');
+App.av = eng;
 
 function fmtDuration(sec) {
   sec = Math.max(0, Math.round(sec));
   const m = Math.floor(sec / 60), s = sec % 60;
   return m + ':' + String(s).padStart(2, '0');
 }
-
-function fillVideoCard(file, extraMeta) {
-  const card = $('#videoCard');
-  card.innerHTML = `
-    <div class="fc-icon">🎬</div>
-    <div>
-      <div class="fc-name"></div>
-      <div class="fc-meta"></div>
-    </div>`;
-  $('.fc-name', card).textContent = file.name;
-  $('.fc-meta', card).textContent = formatSize(file.size) + (extraMeta ? ' · ' + extraMeta : '');
-}
-
-/* ---------------- 文件选择与预览 ---------------- */
-/* 不按 MIME 强校验：MKV/FLV 等在部分系统上拿不到 video/* 类型，交给 ffmpeg 探测 */
-bindDropzone('videoDrop', 'videoInput', file => {
-  if (vd.busy) { toast('正在转换中，请先取消或等待完成', true); return; }
-  vd.file = file;
-  vd.duration = 0;
-  drop.classList.add('hidden');
-  body.classList.remove('hidden');
-  resultEl.classList.add('hidden');
-  audioWrap.classList.add('hidden');
-  hideProgress(progWrap);
-  fillVideoCard(file, '');
-  if (vd.previewUrl) URL.revokeObjectURL(vd.previewUrl);
-  vd.previewUrl = URL.createObjectURL(file);
-  videoEl.classList.remove('hidden');
-  videoEl.src = vd.previewUrl;
-});
-
-videoEl.addEventListener('loadedmetadata', () => {
-  if (vd.file && isFinite(videoEl.duration) && videoEl.duration > 0) {
-    vd.duration = videoEl.duration;
-    fillVideoCard(vd.file, '时长 ' + fmtDuration(vd.duration));
-  }
-});
-/* 浏览器不能播放（如 AVI/WMV）不影响转换，仅收起预览 */
-videoEl.addEventListener('error', () => {
-  if (!vd.file) return;
-  videoEl.classList.add('hidden');
-  fillVideoCard(vd.file, '浏览器无法预览该格式（不影响转换）');
-});
-
-vd.reset = () => {
-  // 转换期间不允许换文件：否则本次输出会张冠李戴（旧音频配新文件名）
-  if (vd.busy) { toast('正在转换中，请先取消或等待完成', true); return; }
-  vd.file = null;
-  vd.duration = 0;
-  if (vd.previewUrl) { URL.revokeObjectURL(vd.previewUrl); vd.previewUrl = null; }
-  if (vd.audioUrl) { URL.revokeObjectURL(vd.audioUrl); vd.audioUrl = null; }
-  videoEl.removeAttribute('src'); videoEl.load();
-  audioEl.removeAttribute('src'); audioEl.load();
-  resultEl.classList.add('hidden');
-  audioWrap.classList.add('hidden');
-  hideProgress(progWrap);
-  body.classList.add('hidden');
-  drop.classList.remove('hidden');
-};
-
-/* 无损格式不需要码率 */
-fmtSelect.addEventListener('change', () => {
-  brSelect.disabled = !FORMATS[fmtSelect.value].lossy;
-});
 
 /* ---------------- 引擎懒加载（约 31MB，带进度） ---------------- */
 const mb = n => (n / 1048576).toFixed(1);
@@ -142,25 +68,93 @@ async function fetchWithProgress(url, onProgress, signal) {
   return out;
 }
 
+/* ---------------- 引擎字节持久缓存（IndexedDB） ----------------
+ * iPhone Safari 不会把 31MB 的 wasm 放进 HTTP 磁盘缓存（WebKit 对单条目体积
+ * 有上限，且缓存回收激进），页面内存中的引擎实例又随标签页回收而消失，
+ * 结果是每次进页面都要重新下载。显式把内核字节存进 IndexedDB（Blob 存储，
+ * HTTP 环境也可用，不像 Cache API 要求 HTTPS），之后进页面秒级加载。
+ * 任何一步失败（隐私模式 / 配额不足 / 序列化异常）都静默回退到网络下载。 */
+const IDB_NAME = 'ft-engine';
+const IDB_STORE = 'files';
+function idbOpen() {
+  return new Promise(resolve => {
+    try {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => { try { req.result.createObjectStore(IDB_STORE); } catch (_) { /* 忽略 */ } };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+      req.onblocked = () => resolve(null);
+    } catch (_) { resolve(null); }
+  });
+}
+async function idbGet(key) {
+  const db = await idbOpen();
+  if (!db) return null;
+  try {
+    return await new Promise(resolve => {
+      const rq = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key);
+      rq.onsuccess = () => resolve(rq.result || null);
+      rq.onerror = () => resolve(null);
+    });
+  } catch (_) { return null; } finally { try { db.close(); } catch (_) { /* 忽略 */ } }
+}
+/* 写入当前版本条目，同时清掉旧版本残留（31MB 不清会白占配额） */
+async function idbPutKeepOnly(entries) {
+  const db = await idbOpen();
+  if (!db) return;
+  try {
+    await new Promise(resolve => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      const st = tx.objectStore(IDB_STORE);
+      const keep = new Set(Object.keys(entries));
+      const cur = st.openCursor();
+      cur.onsuccess = () => {
+        const c = cur.result;
+        if (c) { if (!keep.has(c.key)) c.delete(); c.continue(); }
+        else for (const k of keep) st.put(entries[k], k);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    });
+  } catch (_) { /* 忽略 */ } finally { try { db.close(); } catch (_) { /* 忽略 */ } }
+}
+
 function getFFmpeg() {
-  if (vd.ffmpeg) return Promise.resolve(vd.ffmpeg);
-  if (!vd.loadPromise) {
-    vd.loadPromise = (async () => {
+  if (eng.ffmpeg) return Promise.resolve(eng.ffmpeg);
+  if (!eng.loadPromise) {
+    eng.loadPromise = (async () => {
       if (typeof FFmpegWASM === 'undefined') throw new Error('转换引擎脚本未加载，请刷新页面重试');
-      vd.abort = new AbortController();
-      const signal = vd.abort.signal;
-      const wasmBytes = await fetchWithProgress(FFMPEG_DIR + 'ffmpeg-core.wasm?v=' + FFMPEG_VER, (got, total) =>
-        setProgress(progWrap, total ? (got / total) * 0.95 : 0.05,
-          `正在加载本地转换引擎 ${mb(got)}${total ? ' / ' + mb(total) : ''} MB（仅首次，之后使用缓存）`), signal);
-      const coreBytes = await fetchWithProgress(FFMPEG_DIR + 'ffmpeg-core.js?v=' + FFMPEG_VER, null, signal);
-      setProgress(progWrap, 0.97, '正在初始化转换引擎…');
+      eng.abort = new AbortController();
+      const signal = eng.abort.signal;
+      const wasmKey = 'v' + FFMPEG_VER + ':ffmpeg-core.wasm';
+      const jsKey = 'v' + FFMPEG_VER + ':ffmpeg-core.js';
+      setProgress(eng.progWrap, 0.02, '正在检查本地引擎缓存…');
+      let wasmBytes = await idbGet(wasmKey);
+      let coreBytes = wasmBytes ? await idbGet(jsKey) : null;
+      if (signal.aborted) throw new DOMException('已取消', 'AbortError');
+      if (wasmBytes && coreBytes) {
+        setProgress(eng.progWrap, 0.9, '正在从本地缓存加载转换引擎…');
+      } else {
+        wasmBytes = await fetchWithProgress(FFMPEG_DIR + 'ffmpeg-core.wasm?v=' + FFMPEG_VER, (got, total) =>
+          setProgress(eng.progWrap, total ? (got / total) * 0.95 : 0.05,
+            `正在加载本地转换引擎 ${mb(got)}${total ? ' / ' + mb(total) : ''} MB（仅首次，之后使用缓存）`), signal);
+        coreBytes = await fetchWithProgress(FFMPEG_DIR + 'ffmpeg-core.js?v=' + FFMPEG_VER, null, signal);
+        // 落盘为 Blob（WebKit 以文件形式存储，避免大数组结构化克隆的内存峰值）；
+        // 不 await：写入失败只影响下次是否重新下载
+        idbPutKeepOnly({
+          [wasmKey]: new Blob([wasmBytes], { type: 'application/wasm' }),
+          [jsKey]: new Blob([coreBytes], { type: 'text/javascript' }),
+        });
+      }
+      setProgress(eng.progWrap, 0.97, '正在初始化转换引擎…');
       const ff = new FFmpegWASM.FFmpeg();
-      vd.pendingFf = ff;   // 让「取消」能终止尚未 load 完成的实例，避免遗留 worker
+      eng.pendingFf = ff;   // 让「取消」能终止尚未 load 完成的实例，避免遗留 worker
       ff.on('log', e => {
-        vd.lastLogs.push(e.message);
-        if (vd.lastLogs.length > 60) vd.lastLogs.shift();
+        eng.lastLogs.push(e.message);
+        if (eng.lastLogs.length > 60) eng.lastLogs.shift();
       });
-      ff.on('progress', e => { if (vd.onProgress) vd.onProgress(e); });
+      ff.on('progress', e => { if (eng.onProgress) eng.onProgress(e); });
       // 不传 classWorkerURL：UMD 版传入时会以 module worker 启动，
       // 而其 worker 代码只支持 importScripts（classic），会死锁；
       // 默认路径按 ffmpeg.js 所在目录解析到 vendor/ffmpeg/814.ffmpeg.js。
@@ -173,123 +167,249 @@ function getFFmpeg() {
         URL.revokeObjectURL(coreURL);
         URL.revokeObjectURL(wasmURL);
       }
-      vd.ffmpeg = ff;
-      vd.pendingFf = null;
-      vd.abort = null;
+      eng.ffmpeg = ff;
+      eng.pendingFf = null;
+      eng.abort = null;
       return ff;
     })().catch(err => {
-      vd.loadPromise = null;
-      vd.pendingFf = null;
-      vd.abort = null;
+      eng.loadPromise = null;
+      eng.pendingFf = null;
+      eng.abort = null;
       throw err;
     });
   }
-  return vd.loadPromise;
+  return eng.loadPromise;
 }
 
-/* ---------------- 错误诊断 ---------------- */
-function diagnose(logs, fallbackErr) {
+/* ---------------- 错误诊断（noun：视频 / 音频，用于措辞） ---------------- */
+function diagnose(logs, fallbackErr, noun) {
   const s = logs.join('\n');
-  if (/does not contain any stream|matches no streams|no audio/i.test(s)) return '该视频不包含音频轨';
-  if (/Invalid data found|moov atom not found|EBML header parsing failed|Format .* detected only with low score/i.test(s)) {
-    return '无法识别的视频格式或文件已损坏';
+  if (/does not contain any stream|matches no streams|no audio/i.test(s)) {
+    return noun === '音频' ? '未能从该文件中读取到音频数据' : '该视频不包含音频轨';
   }
-  if (/decoder .* not found|Decoding requested, but no decoder found/i.test(s)) return '暂不支持该视频的音频编码';
+  if (/Invalid data found|moov atom not found|EBML header parsing failed|Format .* detected only with low score/i.test(s)) {
+    return `无法识别的${noun}格式或文件已损坏`;
+  }
+  if (/decoder .* not found|Decoding requested, but no decoder found/i.test(s)) return `暂不支持该${noun}的编码格式`;
   const tail = logs.filter(l => /error|invalid|fail/i.test(l)).slice(-2).join('；');
   return tail ? '转换失败：' + tail.slice(0, 140) : '转换失败：' + friendlyError(fallbackErr || '未知错误');
 }
 
-/* ---------------- 转换 ---------------- */
-btnConvert.addEventListener('click', async () => {
-  if (!vd.file || vd.busy) return;
-  const fmt = fmtSelect.value;
-  const spec = FORMATS[fmt];
-  if (!spec) return;
-  const bitrate = brSelect.value;
-  // 固定本次转换的输入文件：后续 await 期间即使界面状态变化也不会张冠李戴
-  const srcFile = vd.file;
-  vd.busy = true;
-  vd.cancelled = false;
-  vd.lastLogs = [];        // 必须在引擎加载/写文件之前清，否则早期失败会拿上一次的日志误诊
-  btnConvert.disabled = true;
-  btnCancel.classList.remove('hidden');   // 引擎首次下载最耗时，这段也要可取消
-  resultEl.classList.add('hidden');
-  audioWrap.classList.add('hidden');
-  const ext = ((srcFile.name.match(/\.([A-Za-z0-9]{1,6})$/) || [])[1] || 'dat').toLowerCase();
-  const inName = 'input.' + ext;
-  const outName = 'output.' + fmt;
-  try {
-    const ff = await getFFmpeg();
-    setProgress(progWrap, 0, '正在读取视频文件…');
-    await ff.writeFile(inName, new Uint8Array(await srcFile.arrayBuffer()));
-    let lastFrac = 0;
-    vd.onProgress = e => {
-      const t = (e.time || 0) / 1e6;
-      let frac = e.progress;
-      // 部分容器给不出可靠的总时长比例，退回用 <video> 元数据时长估算
-      if (!isFinite(frac) || frac <= 0 || frac > 1.5) frac = vd.duration > 0 ? t / vd.duration : NaN;
-      const timeTxt = t > 0
-        ? '已处理 ' + fmtDuration(vd.duration ? Math.min(t, vd.duration) : t) + (vd.duration ? ' / ' + fmtDuration(vd.duration) : '')
-        : '';
-      if (isFinite(frac)) {
-        lastFrac = Math.max(0, Math.min(1, frac));
-        setProgress(progWrap, lastFrac, `正在提取并转换音频… ${Math.round(lastFrac * 100)}%` + (timeTxt ? `（${timeTxt}）` : ''));
-      } else {
-        // 比例与时长都不可靠：只报已处理时长，不谎报百分比
-        setProgress(progWrap, lastFrac, '正在提取并转换音频…' + (timeTxt ? `（${timeTxt}）` : ''));
-      }
-    };
-    setProgress(progWrap, 0, '正在提取并转换音频…');
-    const ret = await ff.exec(['-i', inName, '-vn', '-sn', '-dn', ...spec.args(bitrate), '-y', outName]);
-    if (ret !== 0) throw new Error(diagnose(vd.lastLogs));
-    const data = await ff.readFile(outName);
-    if (!data || data.length < 128) throw new Error('该视频不包含音频轨或输出为空');
-    const blob = new Blob([data], { type: spec.mime });
-    const base = srcFile.name.replace(/\.[^.]{1,6}$/, '') || 'audio';
-    hideProgress(progWrap);
-    showResult(resultEl, '音频提取完成',
-      `${fmt.toUpperCase()} · ${formatSize(blob.size)}${spec.lossy ? ' · ' + (spec.vbr ? '约 ' : '') + bitrate + ' kbps' : ' · 无损'}，已开始下载，可在下方试听`,
-      blob, base + '.' + fmt);
-    if (vd.audioUrl) URL.revokeObjectURL(vd.audioUrl);
-    vd.audioUrl = URL.createObjectURL(blob);
-    audioEl.src = vd.audioUrl;
-    audioWrap.classList.remove('hidden');
-  } catch (err) {
-    hideProgress(progWrap);
-    if (vd.cancelled) {
-      toast('已取消转换');
-    } else {
-      console.error(err);
-      toast(diagnose(vd.lastLogs, err), true);
-    }
-  } finally {
-    vd.onProgress = null;
-    if (vd.ffmpeg) {
-      try { await vd.ffmpeg.deleteFile(inName); } catch (_) { /* 忽略 */ }
-      try { await vd.ffmpeg.deleteFile(outName); } catch (_) { /* 忽略 */ }
-    }
-    vd.busy = false;
-    vd.cancelled = false;
-    btnConvert.disabled = false;
-    btnCancel.classList.add('hidden');
-  }
-});
+/* ==========================================================================
+ * 子模式面板工厂：视频转音频 / 音频转换 共用同一套加载、转换、取消逻辑
+ * cfg: { key, icon, noun, verb, doneTitle, emptyMsg, dedupeName,
+ *        ids: {drop,input,body,card,media,srcWrap?,fmt,br,btn,btnCancel,prog,result,outWrap,outAudio} }
+ * ========================================================================== */
+function setupPane(cfg) {
+  const el = {};
+  for (const [k, id] of Object.entries(cfg.ids)) el[k] = id ? $('#' + id) : null;
+  const st = { file: null, duration: 0, busy: false, previewUrl: null, audioUrl: null };
 
-/* 取消：中断引擎下载 / 终止 worker，引擎作废（下次转换会重新初始化，wasm 走浏览器缓存） */
-btnCancel.addEventListener('click', () => {
-  if (!vd.busy) return;
-  vd.cancelled = true;
-  if (vd.abort) { try { vd.abort.abort(); } catch (_) { /* 忽略 */ } }
-  const ff = vd.ffmpeg || vd.pendingFf;
-  if (ff) { try { ff.terminate(); } catch (_) { /* 忽略 */ } }
-  vd.ffmpeg = null;
-  vd.pendingFf = null;
-  vd.loadPromise = null;
+  function fillCard(file, extraMeta) {
+    el.card.innerHTML = `
+      <div class="fc-icon">${cfg.icon}</div>
+      <div>
+        <div class="fc-name"></div>
+        <div class="fc-meta"></div>
+      </div>`;
+    $('.fc-name', el.card).textContent = file.name;
+    $('.fc-meta', el.card).textContent = formatSize(file.size) + (extraMeta ? ' · ' + extraMeta : '');
+  }
+
+  /* 不按 MIME 强校验：MKV/FLV/WMA/AMR 等在部分系统上拿不到 video|audio/* 类型，交给 ffmpeg 探测 */
+  bindDropzone(cfg.ids.drop, cfg.ids.input, file => {
+    if (st.busy) { toast('正在转换中，请先取消或等待完成', true); return; }
+    st.file = file;
+    st.duration = 0;
+    el.drop.classList.add('hidden');
+    el.body.classList.remove('hidden');
+    el.result.classList.add('hidden');
+    el.outWrap.classList.add('hidden');
+    hideProgress(el.prog);
+    fillCard(file, '');
+    if (st.previewUrl) URL.revokeObjectURL(st.previewUrl);
+    st.previewUrl = URL.createObjectURL(file);
+    el.media.classList.remove('hidden');
+    if (el.srcWrap) el.srcWrap.classList.remove('hidden');
+    el.media.src = st.previewUrl;
+  });
+
+  el.media.addEventListener('loadedmetadata', () => {
+    if (st.file && isFinite(el.media.duration) && el.media.duration > 0) {
+      st.duration = el.media.duration;
+      fillCard(st.file, '时长 ' + fmtDuration(st.duration));
+    }
+  });
+  /* 浏览器不能播放（如 AVI/WMA/AMR）不影响转换，仅收起预览 */
+  el.media.addEventListener('error', () => {
+    if (!st.file) return;
+    el.media.classList.add('hidden');
+    if (el.srcWrap) el.srcWrap.classList.add('hidden');
+    fillCard(st.file, '浏览器无法预览该格式（不影响转换）');
+  });
+
+  st.reset = () => {
+    // 转换期间不允许换文件：否则本次输出会张冠李戴（旧结果配新文件名）
+    if (st.busy) { toast('正在转换中，请先取消或等待完成', true); return; }
+    st.file = null;
+    st.duration = 0;
+    if (st.previewUrl) { URL.revokeObjectURL(st.previewUrl); st.previewUrl = null; }
+    if (st.audioUrl) { URL.revokeObjectURL(st.audioUrl); st.audioUrl = null; }
+    el.media.removeAttribute('src'); el.media.load();
+    el.outAudio.removeAttribute('src'); el.outAudio.load();
+    el.result.classList.add('hidden');
+    el.outWrap.classList.add('hidden');
+    hideProgress(el.prog);
+    el.body.classList.add('hidden');
+    el.drop.classList.remove('hidden');
+  };
+
+  /* 无损格式不需要码率 */
+  el.fmt.addEventListener('change', () => {
+    el.br.disabled = !FORMATS[el.fmt.value].lossy;
+  });
+
+  el.btn.addEventListener('click', async () => {
+    if (!st.file || st.busy) return;
+    if (eng.busy) { toast('已有转换任务进行中，请先取消或等待完成', true); return; }
+    const fmt = el.fmt.value;
+    const spec = FORMATS[fmt];
+    if (!spec) return;
+    const bitrate = el.br.value;
+    // 固定本次转换的输入文件：后续 await 期间即使界面状态变化也不会张冠李戴
+    const srcFile = st.file;
+    eng.busy = true;
+    eng.owner = cfg.key;
+    eng.cancelled = false;
+    eng.lastLogs = [];       // 必须在引擎加载/写文件之前清，否则早期失败会拿上一次的日志误诊
+    eng.progWrap = el.prog;
+    st.busy = true;
+    el.btn.disabled = true;
+    el.btnCancel.classList.remove('hidden');   // 引擎首次下载最耗时，这段也要可取消
+    el.result.classList.add('hidden');
+    el.outWrap.classList.add('hidden');
+    const ext = ((srcFile.name.match(/\.([A-Za-z0-9]{1,6})$/) || [])[1] || 'dat').toLowerCase();
+    const inName = 'input.' + ext;
+    const outName = 'output.' + fmt;
+    try {
+      const ff = await getFFmpeg();
+      // 取消可能发生在无 fetch 可中断的阶段（如读本地缓存），这里补一道闸
+      if (eng.cancelled) throw new Error('已取消');
+      setProgress(el.prog, 0, `正在读取${cfg.noun}文件…`);
+      await ff.writeFile(inName, new Uint8Array(await srcFile.arrayBuffer()));
+      let lastFrac = 0;
+      eng.onProgress = e => {
+        const t = (e.time || 0) / 1e6;
+        let frac = e.progress;
+        // 部分容器给不出可靠的总时长比例，退回用媒体元数据时长估算
+        if (!isFinite(frac) || frac <= 0 || frac > 1.5) frac = st.duration > 0 ? t / st.duration : NaN;
+        const timeTxt = t > 0
+          ? '已处理 ' + fmtDuration(st.duration ? Math.min(t, st.duration) : t) + (st.duration ? ' / ' + fmtDuration(st.duration) : '')
+          : '';
+        if (isFinite(frac)) {
+          lastFrac = Math.max(0, Math.min(1, frac));
+          setProgress(el.prog, lastFrac, `正在${cfg.verb}… ${Math.round(lastFrac * 100)}%` + (timeTxt ? `（${timeTxt}）` : ''));
+        } else {
+          // 比例与时长都不可靠：只报已处理时长，不谎报百分比
+          setProgress(el.prog, lastFrac, `正在${cfg.verb}…` + (timeTxt ? `（${timeTxt}）` : ''));
+        }
+      };
+      setProgress(el.prog, 0, `正在${cfg.verb}…`);
+      // -vn 同时会剔除音频文件里的内嵌封面图（attached_pic 是一路视频流）
+      const ret = await ff.exec(['-i', inName, '-vn', '-sn', '-dn', ...spec.args(bitrate), '-y', outName]);
+      if (ret !== 0) throw new Error(diagnose(eng.lastLogs, null, cfg.noun));
+      const data = await ff.readFile(outName);
+      if (!data || data.length < 128) throw new Error(cfg.emptyMsg);
+      const blob = new Blob([data], { type: spec.mime });
+      const base = srcFile.name.replace(/\.[^.]{1,6}$/, '') || 'audio';
+      let dlName = base + '.' + fmt;
+      // 同格式转码（如 MP3 压码率）时避免与原文件重名
+      if (cfg.dedupeName && dlName.toLowerCase() === srcFile.name.toLowerCase()) dlName = base + '-转换.' + fmt;
+      hideProgress(el.prog);
+      showResult(el.result, cfg.doneTitle,
+        `${fmt.toUpperCase()} · ${formatSize(blob.size)}${spec.lossy ? ' · ' + (spec.vbr ? '约 ' : '') + bitrate + ' kbps' : ' · 无损'}，已开始下载，可在下方试听`,
+        blob, dlName);
+      if (st.audioUrl) URL.revokeObjectURL(st.audioUrl);
+      st.audioUrl = URL.createObjectURL(blob);
+      el.outAudio.src = st.audioUrl;
+      el.outWrap.classList.remove('hidden');
+    } catch (err) {
+      hideProgress(el.prog);
+      if (eng.cancelled) {
+        toast('已取消转换');
+      } else {
+        console.error(err);
+        toast(diagnose(eng.lastLogs, err, cfg.noun), true);
+      }
+    } finally {
+      eng.onProgress = null;
+      if (eng.ffmpeg) {
+        try { await eng.ffmpeg.deleteFile(inName); } catch (_) { /* 忽略 */ }
+        try { await eng.ffmpeg.deleteFile(outName); } catch (_) { /* 忽略 */ }
+      }
+      eng.busy = false;
+      eng.owner = null;
+      eng.cancelled = false;
+      st.busy = false;
+      el.btn.disabled = false;
+      el.btnCancel.classList.add('hidden');
+    }
+  });
+
+  /* 取消：中断引擎下载 / 终止 worker，引擎作废（下次转换会重新初始化，wasm 走本地缓存） */
+  el.btnCancel.addEventListener('click', () => {
+    if (!st.busy || eng.owner !== cfg.key) return;
+    eng.cancelled = true;
+    if (eng.abort) { try { eng.abort.abort(); } catch (_) { /* 忽略 */ } }
+    const ff = eng.ffmpeg || eng.pendingFf;
+    if (ff) { try { ff.terminate(); } catch (_) { /* 忽略 */ } }
+    eng.ffmpeg = null;
+    eng.pendingFf = null;
+    eng.loadPromise = null;
+  });
+
+  st.pauseMedia = () => { el.media.pause(); el.outAudio.pause(); };
+  return st;
+}
+
+/* ---------------- 两个子模式实例 ---------------- */
+const vd = setupPane({
+  key: 'video', icon: '🎬', noun: '视频', verb: '提取并转换音频',
+  doneTitle: '音频提取完成', emptyMsg: '该视频不包含音频轨或输出为空', dedupeName: false,
+  ids: {
+    drop: 'videoDrop', input: 'videoInput', body: 'videoBody', card: 'videoCard',
+    media: 'videoPreview', srcWrap: null, fmt: 'audioFormat', br: 'audioBitrate',
+    btn: 'btnV2A', btnCancel: 'btnV2ACancel', prog: 'videoProgress', result: 'videoResult',
+    outWrap: 'audioPreviewWrap', outAudio: 'audioPreview',
+  },
 });
+App.video = vd;
+
+const ad = setupPane({
+  key: 'audio', icon: '🎵', noun: '音频', verb: '转换音频',
+  doneTitle: '音频转换完成', emptyMsg: '未能从该文件中读取到音频数据', dedupeName: true,
+  ids: {
+    drop: 'audioDrop', input: 'audioInput', body: 'audioBody', card: 'audioCard',
+    media: 'audioSrcPreview', srcWrap: 'audioSrcWrap', fmt: 'audioFormatA', br: 'audioBitrateA',
+    btn: 'btnA2A', btnCancel: 'btnA2ACancel', prog: 'audioProgress', result: 'audioResult',
+    outWrap: 'audioOutWrap', outAudio: 'audioOutPreview',
+  },
+});
+App.audio = ad;
+
+/* ---------------- 子模式切换（视频转音频 / 音频转换） ---------------- */
+$$('.av-tab').forEach(b => b.addEventListener('click', () => {
+  $$('.av-tab').forEach(x => x.classList.toggle('active', x === b));
+  $('#avV2aPane').classList.toggle('hidden', b.dataset.avmode !== 'v2a');
+  $('#avA2aPane').classList.toggle('hidden', b.dataset.avmode !== 'a2a');
+  // 切走的一侧暂停播放
+  if (b.dataset.avmode !== 'v2a') vd.pauseMedia();
+  if (b.dataset.avmode !== 'a2a') ad.pauseMedia();
+}));
 
 /* 切换到其他顶层工具时暂停播放：否则看不见的视频/音频仍在出声 */
 $$('.tab').forEach(b => b.addEventListener('click', () => {
-  if (b.dataset.tab !== 'video') { videoEl.pause(); audioEl.pause(); }
+  if (b.dataset.tab !== 'video') { vd.pauseMedia(); ad.pauseMedia(); }
 }));
 
 })();

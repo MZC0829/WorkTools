@@ -223,6 +223,7 @@ $$('.btn-reset').forEach(btn => btn.addEventListener('click', () => {
   else if (which === 'edit' && App.editor && App.editor.reset) App.editor.reset();
   else if (which === 'image' && App.image && App.image.reset) App.image.reset();
   else if (which === 'video' && App.video && App.video.reset) App.video.reset();
+  else if (which === 'audio' && App.audio && App.audio.reset) App.audio.reset();
   else if (which === 'archive' && App.archive && App.archive.reset) App.archive.reset();
 }));
 

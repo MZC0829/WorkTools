@@ -27,7 +27,7 @@
       <div class="brand-mark">📄</div>
       <div>
         <h1>全能工具箱</h1>
-        <p class="brand-sub">文档处理 · 图片工具 · 视频转音频 · 压缩解压 · 拾色器 — 一站式本地工具</p>
+        <p class="brand-sub">文档处理 · 图片工具 · 音视频转换 · 压缩解压 · 拾色器 — 一站式本地工具</p>
       </div>
     </div>
     <div class="header-right">
@@ -47,7 +47,7 @@
   <div class="tabs" role="tablist">
     <button class="tab active" data-tab="doc" role="tab">📄 文档工具</button>
     <button class="tab" data-tab="image" role="tab">🖼️ 图片工具</button>
-    <button class="tab" data-tab="video" role="tab">🎬 视频转音频</button>
+    <button class="tab" data-tab="video" role="tab">🎬 音视频转换</button>
     <button class="tab" data-tab="archive" role="tab">📦 压缩解压</button>
     <button class="tab" data-tab="picker" role="tab">🎯 拾色器</button>
   </div>
@@ -496,6 +496,13 @@
 
   <!-- ============ 视频转音频 ============ -->
   <section id="tab-video" class="tab-panel">
+    <div class="seg av-modes">
+      <button class="seg-btn av-tab active" data-avmode="v2a">🎬 视频转音频</button>
+      <button class="seg-btn av-tab" data-avmode="a2a">🎵 音频转换</button>
+    </div>
+
+    <!-- 视频转音频 -->
+    <div id="avV2aPane">
     <div class="dropzone" id="videoDrop">
       <input type="file" id="videoInput" accept="video/*,.mp4,.mov,.webm,.mkv,.avi,.flv,.wmv,.ts,.m2ts,.3gp,.mpg,.mpeg,.rm,.rmvb" hidden>
       <div class="dz-icon">🎬</div>
@@ -527,7 +534,7 @@
         <button class="btn btn-ghost btn-sm hidden" id="btnV2ACancel">取消</button>
         <button class="btn btn-ghost btn-reset" data-reset="video">换个文件</button>
       </div>
-      <p class="hint">首次使用需加载本地转换引擎（约 31 MB，仅一次，之后走浏览器缓存）；转换全程在本地进行，文件不会上传。过大的视频（超过约 1 GB）可能因浏览器内存不足而失败。</p>
+      <p class="hint">首次使用需下载本地转换引擎（约 31 MB，仅一次，之后持久缓存在本机、进页面秒开）；转换全程在本地进行，文件不会上传。过大的视频（超过约 1 GB）可能因浏览器内存不足而失败。</p>
 
       <div class="progress-wrap hidden" id="videoProgress">
         <div class="progress-bar"><div class="progress-fill"></div></div>
@@ -538,6 +545,57 @@
         <span class="rm-label">试听</span>
         <audio id="audioPreview" controls></audio>
       </div>
+    </div>
+    </div>
+
+    <!-- 音频转换 -->
+    <div id="avA2aPane" class="hidden">
+    <div class="dropzone" id="audioDrop">
+      <input type="file" id="audioInput" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.oga,.opus,.wma,.amr,.ape,.aiff,.aif,.caf,.mka" hidden>
+      <div class="dz-icon">🎵</div>
+      <div class="dz-title">拖入或点击选择音频文件</div>
+      <div class="dz-sub">支持 <b>MP3 / WAV / M4A / AAC / FLAC / OGG / OPUS / WMA</b> 等常见格式 · 转换格式或用更低码率压缩体积，全程本地完成</div>
+    </div>
+
+    <div id="audioBody" class="hidden">
+      <div class="file-card" id="audioCard"></div>
+      <div class="audio-preview-wrap" id="audioSrcWrap">
+        <span class="rm-label">原音频</span>
+        <audio id="audioSrcPreview" controls preload="metadata"></audio>
+      </div>
+
+      <div class="range-move">
+        <span class="rm-label">目标格式</span>
+        <select id="audioFormatA" class="rm-select">
+          <option value="mp3" selected>MP3（通用，推荐）</option>
+          <option value="m4a">M4A（AAC）</option>
+          <option value="wav">WAV（无损 PCM）</option>
+          <option value="flac">FLAC（无损压缩）</option>
+          <option value="ogg">OGG（Vorbis）</option>
+        </select>
+        <span class="rm-label">音质</span>
+        <select id="audioBitrateA" class="rm-select">
+          <option value="128">128 kbps（较小）</option>
+          <option value="192" selected>192 kbps（标准）</option>
+          <option value="256">256 kbps（较高）</option>
+          <option value="320">320 kbps（最高）</option>
+        </select>
+        <button class="btn btn-primary" id="btnA2A">🎵 开始转换</button>
+        <button class="btn btn-ghost btn-sm hidden" id="btnA2ACancel">取消</button>
+        <button class="btn btn-ghost btn-reset" data-reset="audio">换个文件</button>
+      </div>
+      <p class="hint">与「视频转音频」共用同一本地转换引擎（约 31 MB，仅首次下载）；选择与原文件相同的格式即可用更低码率压缩体积。转换全程在本地进行，文件不会上传。</p>
+
+      <div class="progress-wrap hidden" id="audioProgress">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-text"></div>
+      </div>
+      <div class="result-card hidden" id="audioResult"></div>
+      <div class="audio-preview-wrap hidden" id="audioOutWrap">
+        <span class="rm-label">试听</span>
+        <audio id="audioOutPreview" controls></audio>
+      </div>
+    </div>
     </div>
   </section>
 
@@ -607,12 +665,12 @@
 <script src="vendor/html2canvas.min.js?v=4"></script>
 <script src="vendor/Sortable.min.js?v=4"></script>
 <script src="js/subset.js?v=1"></script>
-<script src="js/app.js?v=15"></script>
+<script src="js/app.js?v=16"></script>
 <script src="js/editor.js?v=6"></script>
 <script src="js/picker.js?v=2"></script>
 <script src="js/image.js?v=1"></script>
 <script src="js/archive.js?v=2"></script>
 <script src="vendor/ffmpeg/ffmpeg.js?v=1"></script>
-<script src="js/video.js?v=7"></script>
+<script src="js/video.js?v=9"></script>
 </body>
 </html>
