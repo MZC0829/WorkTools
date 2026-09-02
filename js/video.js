@@ -247,6 +247,12 @@ function setupPane(cfg) {
     if (el.srcWrap) el.srcWrap.classList.add('hidden');
     fillCard(st.file, '浏览器无法预览该格式（不影响转换）');
   });
+  /* 输出试听同理：Safari 播不了 OGG 等格式时收起播放器并说明，避免误以为转换失败 */
+  el.outAudio.addEventListener('error', () => {
+    if (!st.audioUrl) return;   // 忽略 reset()/load() 触发的空 src 错误
+    el.outWrap.classList.add('hidden');
+    toast('当前浏览器无法试听该格式（不影响已下载的文件）');
+  });
 
   st.reset = () => {
     // 转换期间不允许换文件：否则本次输出会张冠李戴（旧结果配新文件名）
@@ -406,6 +412,11 @@ $$('.av-tab').forEach(b => b.addEventListener('click', () => {
   if (b.dataset.avmode !== 'v2a') vd.pauseMedia();
   if (b.dataset.avmode !== 'a2a') ad.pauseMedia();
 }));
+
+/* 转换进行中关闭/刷新页面前提醒（误触拖放导航的第二道防线） */
+window.addEventListener('beforeunload', e => {
+  if (eng.busy) { e.preventDefault(); e.returnValue = ''; }
+});
 
 /* 切换到其他顶层工具时暂停播放：否则看不见的视频/音频仍在出声 */
 $$('.tab').forEach(b => b.addEventListener('click', () => {

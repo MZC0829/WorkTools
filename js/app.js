@@ -214,6 +214,12 @@ function bindDropzone(dropId, inputId, onFile) {
   });
 }
 
+/* 兜底：文件拖到任何 dropzone 之外（例如转换中 dropzone 已隐藏）时，
+ * 阻止浏览器默认的“导航到该文件”，否则整页状态与进行中的任务全部丢失。
+ * 元素级 dropzone 的处理器先于冒泡到 document 执行，不受影响。 */
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => e.preventDefault());
+
 /* “换个文件”按钮 */
 $$('.btn-reset').forEach(btn => btn.addEventListener('click', () => {
   const which = btn.dataset.reset;
